@@ -1,0 +1,26 @@
+{
+  "name": "swocker/test-plugin",
+  "description": "Test plugin for Swocker integration tests",
+  "version": "1.0.0",
+  "type": "shopware-platform-plugin",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Swocker"
+    }
+  ],
+  "require": {
+    "shopware/core": "*"
+  },
+  "extra": {
+    "shopware-plugin-class": "Swocker\\TestPlugin\\TestPlugin",
+    "label": {
+      "en-GB": "Test Plugin"
+    }
+  },
+  "autoload": {
+    "psr-4": {
+      "Swocker\\TestPlugin\\": "src/"
+    }
+  }
+}

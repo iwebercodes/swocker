@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: shopware
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - '3306:3306'
+    # Use tmpfs for significantly faster database operations
+    # Data is stored in RAM and lost on container restart
+    # Perfect for development where you can reinstall quickly
+    tmpfs:
+      - /var/lib/mysql:rw,noexec,nosuid,size=1g
+    networks:
+      - shopware
+
+  shopware:
+    image: ghcr.io/ilja/swocker:6.7-php8.2-dev
+    ports:
+      - '80:80'
+    environment:
+      # Database configuration
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      DATABASE_USER: root
+      DATABASE_PASSWORD: root
+      DATABASE_NAME: shopware
+
+      # Admin user configuration
+      SHOPWARE_ADMIN_USER: admin
+      SHOPWARE_ADMIN_PASSWORD: shopware
+      SHOPWARE_ADMIN_EMAIL: admin@example.com
+
+      # Application configuration
+      APP_ENV: dev
+      APP_URL: http://localhost
+
+      # Development features
+      XDEBUG_ENABLED: 0 # Set to 1 to enable Xdebug
+      XDEBUG_CLIENT_HOST: host.docker.internal
+      XDEBUG_CLIENT_PORT: 9003
+
+      # Optional: Install demo data
+      INSTALL_DEMO_DATA: 0 # Set to 1 to install demo data
+
+      # Optional: Auto-install plugins
+      # AUTO_INSTALL_PLUGINS: "MyPlugin,AnotherPlugin"
+
+      # PHP configuration
+      PHP_MEMORY_LIMIT: 1024M
+      PHP_UPLOAD_MAX_FILESIZE: 256M
+      PHP_POST_MAX_SIZE: 256M
+    volumes:
+      # Mount your custom plugins
+      # - ./plugins/MyPlugin:/var/www/html/custom/plugins/MyPlugin
+
+      # Mount custom apps (optional)
+      # - ./apps:/var/www/html/custom/apps
+
+      # Mount themes (optional)
+      # - ./themes:/var/www/html/custom/plugins/themes
+    depends_on:
+      - mysql
+    networks:
+      - shopware
+
+  # Optional: Adminer for database management
+  # Uncomment if you want a web interface for MySQL
+  # adminer:
+  #   image: adminer:latest
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     ADMINER_DEFAULT_SERVER: mysql
+  #   depends_on:
+  #     - mysql
+  #   networks:
+  #     - shopware
+
+  # Optional: MailHog for email testing
+  # Uncomment if you need to test email sending
+  # mailhog:
+  #   image: mailhog/mailhog:latest
+  #   ports:
+  #     - "1025:1025"  # SMTP
+  #     - "8025:8025"  # Web UI
+  #   networks:
+  #     - shopware
+
+networks:
+  shopware:
+    driver: bridge

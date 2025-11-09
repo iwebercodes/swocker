@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: shopware
+      MYSQL_USER: shopware
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      # Use persistent volume for production
+      - mysql_data:/var/lib/mysql
+    networks:
+      - shopware
+    restart: unless-stopped
+    # Production MySQL configuration
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_allowed_packet=128M
+      - --innodb-buffer-pool-size=1G
+
+  shopware:
+    image: ghcr.io/ilja/swocker:6.7-php8.2-prod
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      # Database configuration
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      DATABASE_USER: shopware
+      DATABASE_PASSWORD: ${DB_PASSWORD}
+      DATABASE_NAME: shopware
+
+      # Admin user (change these!)
+      SHOPWARE_ADMIN_USER: ${ADMIN_USER}
+      SHOPWARE_ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SHOPWARE_ADMIN_EMAIL: ${ADMIN_EMAIL}
+
+      # Application configuration
+      APP_ENV: prod
+      APP_SECRET: ${APP_SECRET}
+      APP_URL: ${APP_URL}
+
+      # SSL/HTTPS
+      SSL_ENABLED: 1
+
+      # PHP production settings
+      PHP_MEMORY_LIMIT: 512M
+      PHP_UPLOAD_MAX_FILESIZE: 128M
+      PHP_POST_MAX_SIZE: 128M
+      PHP_MAX_EXECUTION_TIME: 300
+    volumes:
+      # Persistent storage for uploaded files
+      - shopware_files:/var/www/html/files
+      - shopware_media:/var/www/html/public/media
+      - shopware_thumbnail:/var/www/html/public/thumbnail
+
+      # Custom plugins (if needed)
+      # - ./plugins:/var/www/html/custom/plugins:ro
+    depends_on:
+      - mysql
+    networks:
+      - shopware
+    restart: unless-stopped
+    # Production health check
+    healthcheck:
+      test: ['CMD', '/usr/local/bin/healthcheck.sh']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Optional: Nginx reverse proxy with Let's Encrypt
+  # Uncomment for production SSL with real certificates
+  # nginx-proxy:
+  #   image: nginxproxy/nginx-proxy
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - /var/run/docker.sock:/tmp/docker.sock:ro
+  #     - nginx_certs:/etc/nginx/certs:ro
+  #     - nginx_vhost:/etc/nginx/vhost.d
+  #     - nginx_html:/usr/share/nginx/html
+  #   networks:
+  #     - shopware
+  #   restart: unless-stopped
+
+  # letsencrypt:
+  #   image: nginxproxy/acme-companion
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #     - nginx_certs:/etc/nginx/certs
+  #     - nginx_vhost:/etc/nginx/vhost.d
+  #     - nginx_html:/usr/share/nginx/html
+  #   environment:
+  #     - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
+  #   depends_on:
+  #     - nginx-proxy
+  #   networks:
+  #     - shopware
+  #   restart: unless-stopped
+
+volumes:
+  mysql_data:
+    driver: local
+  shopware_files:
+    driver: local
+  shopware_media:
+    driver: local
+  shopware_thumbnail:
+    driver: local
+  # nginx_certs:
+  #   driver: local
+  # nginx_vhost:
+  #   driver: local
+  # nginx_html:
+  #   driver: local
+
+networks:
+  shopware:
+    driver: bridge

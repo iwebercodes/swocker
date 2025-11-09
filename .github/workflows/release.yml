@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  # Test Jobs
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Run type checking
+        run: npm run type-check
+
+      - name: Check formatting
+        run: npm run format:check
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: |
+          npm run test:versions
+          npm run test:matrix
+          npm run test:ci-config
+          npm run test:docs
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - build
+          - database
+          - configuration
+          - plugins
+          - variant:dev
+          - variant:prod
+          - variant:ci
+          - performance
+          - advanced
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration test
+        run: npm run test:${{ matrix.test }}
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - e2e
+          - edge-cases
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run E2E test
+        run: npm run test:${{ matrix.test }}
+
+  # Build and Push Jobs
+  generate-matrix:
+    name: Generate Build Matrix
+    needs: [lint, unit-tests, integration-tests, e2e-tests]
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate matrix
+        id: generate
+        run: |
+          MATRIX=$(npx tsx scripts/generate-matrix.ts)
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  publish:
+    name: Publish ${{ matrix.shopware }}-${{ matrix.variant }}
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: iwebercodes/swocker
+          tags: |
+            type=raw,value=${{ matrix.tag }}
+            type=raw,value=latest-${{ matrix.variant }},enable=${{ matrix.isLatest }}
+            type=raw,value=latest,enable=${{ matrix.isLatest && matrix.variant == 'dev' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          target: ${{ matrix.variant }}
+          build-args: |
+            SHOPWARE_VERSION=${{ matrix.shopware }}
+            DEFAULT_PHP_VERSION=${{ matrix.defaultPhp }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image summary
+        run: |
+          echo "### Image Published :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Shopware:** ${{ matrix.shopware }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Default PHP:** ${{ matrix.defaultPhp }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Includes PHP:** 8.2, 8.3" >> $GITHUB_STEP_SUMMARY
+          echo "- **Variant:** ${{ matrix.variant }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag:** ${{ matrix.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Is Latest:** ${{ matrix.isLatest }}" >> $GITHUB_STEP_SUMMARY

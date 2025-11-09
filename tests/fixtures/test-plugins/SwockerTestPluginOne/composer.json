@@ -1,0 +1,17 @@
+{
+  "name": "swocker/test-plugin-one",
+  "description": "Test Plugin One for Swocker E2E Tests",
+  "type": "shopware-platform-plugin",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "SwockerTestPluginOne\\": "src/"
+    }
+  },
+  "extra": {
+    "shopware-plugin-class": "SwockerTestPluginOne\\SwockerTestPluginOne",
+    "label": {
+      "en-GB": "Swocker Test Plugin One"
+    }
+  }
+}

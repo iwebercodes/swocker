@@ -1,0 +1,15 @@
+echo "Running pre-commit checks..."
+
+# Run linting
+echo "Checking linting..."
+npm run lint || exit 1
+
+# Check formatting
+echo "Checking formatting..."
+npm run format:check || exit 1
+
+# Type check
+echo "Checking types..."
+npm run type-check || exit 1
+
+echo "All pre-commit checks passed!"

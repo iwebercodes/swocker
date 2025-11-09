@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: shopware
+    tmpfs:
+      - /var/lib/mysql
+
+  shopware:
+    image: swocker:test-dev
+    ports:
+      - '80:80'
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PASSWORD: root
+      # PHP_VERSION: "8.2"  # Optional: Specify PHP version (8.2 or 8.3, defaults to 8.3)
+    depends_on:
+      - mysql

@@ -1,0 +1,49 @@
+version: '3.8'
+
+# Example: Plugin development setup with auto-installation
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: shopware
+    tmpfs:
+      - /var/lib/mysql:rw,noexec,nosuid,size=1g
+    networks:
+      - shopware
+
+  shopware:
+    image: ghcr.io/ilja/swocker:6.7-php8.2-dev
+    ports:
+      - '80:80'
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PASSWORD: root
+
+      # Auto-install your plugins on startup
+      AUTO_INSTALL_PLUGINS: 'MyAwesomePlugin,MyOtherPlugin'
+
+      # Enable Xdebug for debugging
+      XDEBUG_ENABLED: 1
+      XDEBUG_CLIENT_HOST: host.docker.internal
+
+      APP_ENV: dev
+
+      # Higher memory limit for development
+      PHP_MEMORY_LIMIT: 2048M
+    volumes:
+      # Mount your plugin directories
+      - ./MyAwesomePlugin:/var/www/html/custom/plugins/MyAwesomePlugin:delegated
+      - ./MyOtherPlugin:/var/www/html/custom/plugins/MyOtherPlugin:delegated
+
+      # If you need to modify core files (not recommended, but sometimes necessary)
+      # - ./src:/var/www/html/src:delegated
+    depends_on:
+      - mysql
+    networks:
+      - shopware
+
+networks:
+  shopware:
+    driver: bridge

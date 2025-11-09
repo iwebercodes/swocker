@@ -1,0 +1,36 @@
+version: '3.8'
+
+# Example: Using Nginx variant instead of Apache
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: shopware
+      MYSQL_ROOT_HOST: '%'
+    tmpfs:
+      - /var/lib/mysql:rw,noexec,nosuid,size=1g
+    networks:
+      - shopware
+
+  shopware:
+    # Note the -nginx suffix
+    image: ghcr.io/ilja/swocker:6.7-php8.2-dev-nginx
+    ports:
+      - '80:80'
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PASSWORD: root
+      SHOPWARE_ADMIN_USER: admin
+      SHOPWARE_ADMIN_PASSWORD: shopware
+      APP_ENV: dev
+      XDEBUG_ENABLED: 0
+    depends_on:
+      - mysql
+    networks:
+      - shopware
+
+networks:
+  shopware:
+    driver: bridge

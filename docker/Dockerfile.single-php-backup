@@ -1,0 +1,444 @@
+# Swocker - Modern Shopware 6 Docker Image
+# Multi-stage Dockerfile supporting dev, prod, and ci variants
+
+ARG PHP_VERSION=8.2
+ARG SHOPWARE_VERSION=6.7.4.0
+
+# =============================================================================
+# BASE STAGE - Common foundation for all variants
+# =============================================================================
+FROM php:${PHP_VERSION}-apache AS base
+
+# Set labels
+LABEL maintainer="Ilja Weber"
+LABEL org.opencontainers.image.title="Swocker"
+LABEL org.opencontainers.image.description="Modern Shopware 6 Docker Image"
+
+# Build arguments
+ARG SHOPWARE_VERSION
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV SHOPWARE_VERSION=${SHOPWARE_VERSION}
+
+# Database environment variables (can be overridden)
+ENV DATABASE_HOST="" \
+    DATABASE_PORT="3306" \
+    DATABASE_USER="root" \
+    DATABASE_PASSWORD="" \
+    DATABASE_NAME="shopware" \
+    DB_MAX_RETRIES="30" \
+    DB_RETRY_INTERVAL="2"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    # Core utilities
+    curl \
+    wget \
+    unzip \
+    openssl \
+    # Image processing
+    libfreetype6-dev \
+    libjpeg62-turbo-dev \
+    libpng-dev \
+    libwebp-dev \
+    # XML/XSLT
+    libxml2-dev \
+    libxslt1-dev \
+    # Intl
+    libicu-dev \
+    # Zip
+    libzip-dev \
+    # MySQL client
+    default-mysql-client \
+    # Cleanup
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PHP extensions required by Shopware 6
+RUN docker-php-ext-configure gd \
+    --with-freetype \
+    --with-jpeg \
+    --with-webp \
+    && docker-php-ext-install -j$(nproc) \
+    gd \
+    intl \
+    pdo_mysql \
+    mysqli \
+    opcache \
+    zip \
+    bcmath \
+    soap \
+    xsl
+
+# Install Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# Configure PHP base settings
+COPY docker/configs/php/base.ini /usr/local/etc/php/conf.d/swocker-base.ini
+
+# Configure Apache
+RUN a2enmod rewrite headers expires \
+    && echo "ServerName localhost" >> /etc/apache2/apache2.conf
+
+COPY docker/configs/apache/vhost.conf /etc/apache2/sites-available/000-default.conf
+
+# Set working directory
+WORKDIR /var/www/html
+
+# Download and install Shopware (but don't install composer deps yet)
+RUN curl -fsSL https://github.com/shopware/production/archive/refs/tags/v${SHOPWARE_VERSION}.zip -o shopware.zip \
+    && unzip -q shopware.zip \
+    && mv template-${SHOPWARE_VERSION}/* . \
+    && mv template-${SHOPWARE_VERSION}/.* . 2>/dev/null || true \
+    && rm -rf template-${SHOPWARE_VERSION} shopware.zip
+
+# Create required directories
+RUN mkdir -p \
+    /var/www/html/var/cache \
+    /var/www/html/var/log \
+    /var/www/html/public/media \
+    /var/www/html/public/thumbnail \
+    /var/www/html/public/sitemap \
+    /var/www/html/files
+
+# Set ownership
+RUN chown -R www-data:www-data /var/www/html
+
+# Copy scripts
+COPY docker/scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/scripts/healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY docker/scripts/wait-for-db.sh /usr/local/bin/wait-for-db.sh
+
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/healthcheck.sh \
+    && chmod +x /usr/local/bin/wait-for-db.sh
+
+# =============================================================================
+# DEV VARIANT - Development with Xdebug and dev tools
+# =============================================================================
+FROM base AS dev
+
+ENV VARIANT=dev
+
+# Install development tools
+RUN apt-get update && apt-get install -y \
+    git \
+    vim \
+    nano \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js for asset building
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Xdebug
+RUN pecl install xdebug \
+    && docker-php-ext-enable xdebug
+
+# Copy Xdebug configuration
+COPY docker/configs/php/xdebug.ini /usr/local/etc/php/conf.d/swocker-xdebug.ini
+
+# Install Composer dependencies with dev packages
+USER www-data
+RUN composer install --no-interaction --optimize-autoloader
+USER root
+
+# Expose HTTP port
+EXPOSE 80
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD /usr/local/bin/healthcheck.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["apache2-foreground"]
+
+# =============================================================================
+# PROD VARIANT - Optimized production without dev tools
+# =============================================================================
+FROM base AS prod
+
+ENV VARIANT=prod
+
+# Install Composer dependencies without dev packages
+USER www-data
+RUN composer install --no-interaction --optimize-autoloader --no-dev
+USER root
+
+# Copy production PHP configuration
+COPY docker/configs/php/prod.ini /usr/local/etc/php/conf.d/swocker-prod.ini
+
+# Expose HTTP port
+EXPOSE 80
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD /usr/local/bin/healthcheck.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["apache2-foreground"]
+
+# =============================================================================
+# CI VARIANT - CLI-only for continuous integration
+# =============================================================================
+FROM php:${PHP_VERSION}-cli AS ci
+
+ARG SHOPWARE_VERSION
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV SHOPWARE_VERSION=${SHOPWARE_VERSION}
+ENV VARIANT=ci
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    unzip \
+    openssl \
+    libfreetype6-dev \
+    libjpeg62-turbo-dev \
+    libpng-dev \
+    libwebp-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libicu-dev \
+    libzip-dev \
+    default-mysql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PHP extensions
+RUN docker-php-ext-configure gd \
+    --with-freetype \
+    --with-jpeg \
+    --with-webp \
+    && docker-php-ext-install -j$(nproc) \
+    gd \
+    intl \
+    pdo_mysql \
+    mysqli \
+    opcache \
+    zip \
+    bcmath \
+    soap \
+    xsl
+
+# Install Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# Configure PHP
+COPY docker/configs/php/base.ini /usr/local/etc/php/conf.d/swocker-base.ini
+
+# Set working directory
+WORKDIR /var/www/html
+
+# Download and install Shopware
+RUN curl -fsSL https://github.com/shopware/production/archive/refs/tags/v${SHOPWARE_VERSION}.zip -o shopware.zip \
+    && unzip -q shopware.zip \
+    && mv template-${SHOPWARE_VERSION}/* . \
+    && mv template-${SHOPWARE_VERSION}/.* . 2>/dev/null || true \
+    && rm -rf template-${SHOPWARE_VERSION} shopware.zip
+
+# Install Composer dependencies (with dev for testing tools)
+RUN composer install --no-interaction --optimize-autoloader
+
+# Create required directories
+RUN mkdir -p \
+    /var/www/html/var/cache \
+    /var/www/html/var/log \
+    /var/www/html/public/media \
+    /var/www/html/public/thumbnail \
+    /var/www/html/public/sitemap \
+    /var/www/html/files
+
+# Copy scripts (but no healthcheck since it's CLI-only)
+COPY docker/scripts/wait-for-db.sh /usr/local/bin/wait-for-db.sh
+RUN chmod +x /usr/local/bin/wait-for-db.sh
+
+# Default command (can be overridden)
+CMD ["php", "-v"]
+
+# =============================================================================
+# NGINX BASE - Alternative base with Nginx instead of Apache
+# =============================================================================
+FROM php:${PHP_VERSION}-fpm AS nginx-base
+
+# Set labels
+LABEL maintainer="Ilja Weber"
+LABEL org.opencontainers.image.title="Swocker"
+LABEL org.opencontainers.image.description="Modern Shopware 6 Docker Image (Nginx)"
+
+# Build arguments
+ARG SHOPWARE_VERSION
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV SHOPWARE_VERSION=${SHOPWARE_VERSION}
+
+# Database environment variables (can be overridden)
+ENV DATABASE_HOST="" \
+    DATABASE_PORT="3306" \
+    DATABASE_USER="root" \
+    DATABASE_PASSWORD="" \
+    DATABASE_NAME="shopware" \
+    DB_MAX_RETRIES="30" \
+    DB_RETRY_INTERVAL="2"
+
+# Install system dependencies including Nginx
+RUN apt-get update && apt-get install -y \
+    # Core utilities
+    curl \
+    wget \
+    unzip \
+    openssl \
+    # Nginx
+    nginx \
+    # Image processing
+    libfreetype6-dev \
+    libjpeg62-turbo-dev \
+    libpng-dev \
+    libwebp-dev \
+    # XML/XSLT
+    libxml2-dev \
+    libxslt1-dev \
+    # Intl
+    libicu-dev \
+    # Zip
+    libzip-dev \
+    # MySQL client
+    default-mysql-client \
+    # Supervisor for managing multiple processes
+    supervisor \
+    # Cleanup
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PHP extensions required by Shopware 6
+RUN docker-php-ext-configure gd \
+    --with-freetype \
+    --with-jpeg \
+    --with-webp \
+    && docker-php-ext-install -j$(nproc) \
+    gd \
+    intl \
+    pdo_mysql \
+    mysqli \
+    opcache \
+    zip \
+    bcmath \
+    soap \
+    xsl
+
+# Install Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# Configure PHP base settings
+COPY docker/configs/php/base.ini /usr/local/etc/php/conf.d/swocker-base.ini
+
+# Configure Nginx
+RUN rm -f /etc/nginx/sites-enabled/default
+COPY docker/configs/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY docker/configs/nginx/shopware.conf /etc/nginx/sites-available/shopware.conf
+RUN ln -s /etc/nginx/sites-available/shopware.conf /etc/nginx/sites-enabled/shopware.conf
+
+# Configure PHP-FPM
+RUN sed -i 's/listen = .*/listen = 127.0.0.1:9000/' /usr/local/etc/php-fpm.d/www.conf
+
+# Set working directory
+WORKDIR /var/www/html
+
+# Download and install Shopware (but don't install composer deps yet)
+RUN curl -fsSL https://github.com/shopware/production/archive/refs/tags/v${SHOPWARE_VERSION}.zip -o shopware.zip \
+    && unzip -q shopware.zip \
+    && mv template-${SHOPWARE_VERSION}/* . \
+    && mv template-${SHOPWARE_VERSION}/.* . 2>/dev/null || true \
+    && rm -rf template-${SHOPWARE_VERSION} shopware.zip
+
+# Create required directories
+RUN mkdir -p \
+    /var/www/html/var/cache \
+    /var/www/html/var/log \
+    /var/www/html/public/media \
+    /var/www/html/public/thumbnail \
+    /var/www/html/public/sitemap \
+    /var/www/html/files
+
+# Set ownership
+RUN chown -R www-data:www-data /var/www/html
+
+# Copy scripts
+COPY docker/scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/scripts/healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY docker/scripts/wait-for-db.sh /usr/local/bin/wait-for-db.sh
+
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/healthcheck.sh \
+    && chmod +x /usr/local/bin/wait-for-db.sh
+
+# Configure Supervisor
+COPY docker/configs/nginx/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# =============================================================================
+# DEV VARIANT (Nginx) - Development with Nginx, Xdebug and dev tools
+# =============================================================================
+FROM nginx-base AS dev-nginx
+
+ENV VARIANT=dev-nginx
+
+# Install development tools
+RUN apt-get update && apt-get install -y \
+    git \
+    vim \
+    nano \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js for asset building
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Xdebug
+RUN pecl install xdebug \
+    && docker-php-ext-enable xdebug
+
+# Copy Xdebug configuration
+COPY docker/configs/php/xdebug.ini /usr/local/etc/php/conf.d/swocker-xdebug.ini
+
+# Install Composer dependencies with dev packages
+USER www-data
+RUN composer install --no-interaction --optimize-autoloader
+USER root
+
+# Expose HTTP and HTTPS ports
+EXPOSE 80 443
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD /usr/local/bin/healthcheck.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+
+# =============================================================================
+# PROD VARIANT (Nginx) - Optimized production with Nginx
+# =============================================================================
+FROM nginx-base AS prod-nginx
+
+ENV VARIANT=prod-nginx
+
+# Install Composer dependencies without dev packages
+USER www-data
+RUN composer install --no-interaction --optimize-autoloader --no-dev
+USER root
+
+# Copy production PHP configuration
+COPY docker/configs/php/prod.ini /usr/local/etc/php/conf.d/swocker-prod.ini
+
+# Expose HTTP and HTTPS ports
+EXPOSE 80 443
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD /usr/local/bin/healthcheck.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+

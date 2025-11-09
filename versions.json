@@ -1,0 +1,82 @@
+{
+  "lastUpdated": "2025-11-07T15:00:14.943Z",
+  "versions": [
+    {
+      "version": "6.7.4.0",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.4.0.zip",
+      "releaseDate": "2025-11-04T10:40:48+00:00"
+    },
+    {
+      "version": "6.7.3.1",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.3.1.zip",
+      "releaseDate": "2025-10-21T09:38:07+00:00"
+    },
+    {
+      "version": "6.7.3.0",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.3.0.zip",
+      "releaseDate": "2025-10-06T11:31:29+00:00"
+    },
+    {
+      "version": "6.7.2.2",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.2.2.zip",
+      "releaseDate": "2025-09-15T11:27:21+00:00"
+    },
+    {
+      "version": "6.7.2.1",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.2.1.zip",
+      "releaseDate": "2025-09-10T00:12:59+00:00"
+    },
+    {
+      "version": "6.7.2.0",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.2.0.zip",
+      "releaseDate": "2025-09-02T00:13:11+00:00"
+    },
+    {
+      "version": "6.7.1.2",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.1.2.zip",
+      "releaseDate": "2025-08-01T00:17:03+00:00"
+    },
+    {
+      "version": "6.7.1.1",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.1.1.zip",
+      "releaseDate": "2025-07-28T14:54:56+00:00"
+    },
+    {
+      "version": "6.7.1.0",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.1.0.zip",
+      "releaseDate": "2025-07-24T08:30:03+00:00"
+    },
+    {
+      "version": "6.7.0.1",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.0.1.zip",
+      "releaseDate": "2025-07-01T00:16:17+00:00"
+    },
+    {
+      "version": "6.7.0.0",
+      "php": ["8.2", "8.3"],
+      "defaultPhp": "8.3",
+      "downloadUrl": "https://github.com/shopware/production/archive/refs/tags/v6.7.0.0.zip",
+      "releaseDate": "2025-06-17T13:32:46+00:00"
+    }
+  ]
+}
