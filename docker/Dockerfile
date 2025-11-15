@@ -107,6 +107,10 @@ RUN curl -fsSL https://github.com/shopware/production/archive/refs/tags/v${SHOPW
     && mv template-${SHOPWARE_VERSION}/.* . 2>/dev/null || true \
     && rm -rf template-${SHOPWARE_VERSION} shopware.zip
 
+# Disable Composer 2.9+ security audit blocking for development/testing
+# This allows installing Shopware versions with known vulnerabilities for testing purposes
+RUN php -r '$json = json_decode(file_get_contents("composer.json"), true); $json["config"]["audit"]["block-insecure"] = false; file_put_contents("composer.json", json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));'
+
 # Create required directories
 RUN mkdir -p \
     /var/www/html/var/cache \
@@ -274,6 +278,10 @@ RUN curl -fsSL https://github.com/shopware/production/archive/refs/tags/v${SHOPW
     && mv template-${SHOPWARE_VERSION}/.* . 2>/dev/null || true \
     && rm -rf template-${SHOPWARE_VERSION} shopware.zip
 
+# Disable Composer 2.9+ security audit blocking for development/testing
+# This allows installing Shopware versions with known vulnerabilities for testing purposes
+RUN php -r '$json = json_decode(file_get_contents("composer.json"), true); $json["config"]["audit"]["block-insecure"] = false; file_put_contents("composer.json", json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));'
+
 # Install Composer dependencies (with dev for testing tools)
 RUN composer install --no-interaction --optimize-autoloader
 
@@ -387,6 +395,10 @@ RUN curl -fsSL https://github.com/shopware/production/archive/refs/tags/v${SHOPW
     && mv template-${SHOPWARE_VERSION}/* . \
     && mv template-${SHOPWARE_VERSION}/.* . 2>/dev/null || true \
     && rm -rf template-${SHOPWARE_VERSION} shopware.zip
+
+# Disable Composer 2.9+ security audit blocking for development/testing
+# This allows installing Shopware versions with known vulnerabilities for testing purposes
+RUN php -r '$json = json_decode(file_get_contents("composer.json"), true); $json["config"]["audit"]["block-insecure"] = false; file_put_contents("composer.json", json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));'
 
 # Create required directories
 RUN mkdir -p \
