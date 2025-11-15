@@ -4,6 +4,59 @@
 # The web server should start regardless so users can debug issues.
 
 # =============================================================================
+# HOOK EXECUTION FUNCTION
+# =============================================================================
+run_hooks() {
+    local hook_dir="$1"
+    local hook_stage="$2"
+    local run_as_user="${3:-root}"
+
+    # Check if directory exists
+    if [ ! -d "$hook_dir" ]; then
+        return 0
+    fi
+
+    # Count *.sh files
+    local hook_count=$(find "$hook_dir" -maxdepth 1 -name "*.sh" -type f 2>/dev/null | wc -l)
+    if [ "$hook_count" -eq 0 ]; then
+        return 0
+    fi
+
+    echo "[Swocker] Executing ${hook_stage} scripts..."
+
+    # Sort files alphabetically and execute
+    for script in $(find "$hook_dir" -maxdepth 1 -name "*.sh" -type f | sort); do
+        if [ -f "$script" ]; then
+            local script_name=$(basename "$script")
+
+            echo "[Swocker] Running ${script_name}..."
+
+            # Run as specified user
+            # Use cat to pipe script content to bash to avoid needing execute permissions
+            if [ "$run_as_user" = "www-data" ]; then
+                if cat "$script" | su -s /bin/bash www-data -c "cd /var/www/html && bash"; then
+                    echo "[Swocker] ✓ ${script_name} completed"
+                else
+                    local exit_code=$?
+                    echo "[Swocker] ✗ ${script_name} failed with exit code ${exit_code}"
+                    echo "[Swocker] ERROR: Initialization failed, stopping container"
+                    exit ${exit_code}
+                fi
+            else
+                if cat "$script" | bash; then
+                    echo "[Swocker] ✓ ${script_name} completed"
+                else
+                    local exit_code=$?
+                    echo "[Swocker] ✗ ${script_name} failed with exit code ${exit_code}"
+                    echo "[Swocker] ERROR: Initialization failed, stopping container"
+                    exit ${exit_code}
+                fi
+            fi
+        fi
+    done
+}
+
+# =============================================================================
 # PHP VERSION SWITCHING
 # =============================================================================
 
@@ -280,6 +333,9 @@ if [ -n "$PHP_MAX_EXECUTION_TIME" ]; then
     done
 fi
 
+# Execute pre-init hooks
+run_hooks "/docker-entrypoint-init.d" "pre-initialization" "root"
+
 # Wait for database if DATABASE_HOST is set
 if [ -n "$DATABASE_HOST" ]; then
     echo "[Swocker] Database host configured, checking connectivity..."
@@ -394,6 +450,9 @@ EOF
 else
     echo "[Swocker] No database configured, skipping Shopware installation"
 fi
+
+# Execute Shopware hooks (runs regardless of DATABASE_HOST for future SQLite/internal DB support)
+run_hooks "/docker-entrypoint-shopware.d" "Shopware initialization" "www-data"
 
 echo "[Swocker] Container ready!"
 

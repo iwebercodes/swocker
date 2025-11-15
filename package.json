@@ -20,6 +20,7 @@
     "test:docs": "vitest run tests/unit/docs.test.ts",
     "test:performance": "vitest run tests/integration/performance.test.ts",
     "test:advanced": "vitest run tests/integration/advanced.test.ts",
+    "test:hooks": "vitest run tests/integration/hooks.test.ts",
     "test:e2e": "vitest run tests/e2e/complete-workflow.test.ts",
     "test:edge-cases": "vitest run tests/e2e/edge-cases.test.ts",
     "test:full": "vitest run",

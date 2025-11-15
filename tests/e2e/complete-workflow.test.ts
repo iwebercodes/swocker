@@ -80,6 +80,10 @@ describe('Complete E2E Workflow', () => {
         // Wait for container to be healthy
         await waitForHealthy(container, 120000);
 
+        // Wait for Shopware installation to fully complete (install.lock file)
+        // This ensures migrations are done, not just healthcheck passing
+        await waitForLog(container, 'Container ready', 180000);
+
         // Test 1: Verify storefront is accessible
         const storefrontResponse = await fetch('http://localhost', {
           redirect: 'follow',

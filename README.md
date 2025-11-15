@@ -226,6 +226,112 @@ volumes:
   - ./plugins/MyCustomPlugin:/var/www/html/custom/plugins/MyCustomPlugin
 ```
 
+### Custom Initialization Hook Scripts
+
+Swocker supports custom initialization scripts that execute automatically at specific container lifecycle stages. This allows you to automate configuration, data imports, and other setup tasks without manual intervention.
+
+#### Hook Directories
+
+- **`/docker-entrypoint-init.d/`** - System-level initialization scripts (runs as root, before database operations)
+- **`/docker-entrypoint-shopware.d/`** - Shopware initialization scripts (runs as `www-data`, after Shopware installation)
+
+#### Usage
+
+Mount your hook scripts as volumes in docker-compose.yml:
+
+```yaml
+services:
+  shopware:
+    image: iwebercodes/swocker:latest-dev
+    volumes:
+      - ./init-scripts:/docker-entrypoint-shopware.d:ro
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PASSWORD: root
+```
+
+#### Script Requirements
+
+- Scripts must have `.sh` extension
+- Scripts execute in alphabetical order (use numbered prefixes like `10-`, `20-` to control order)
+- Scripts run with `bash -e` (fail-fast mode)
+- Container startup fails if any hook script exits with non-zero status
+- Scripts should be idempotent (safe to run multiple times)
+
+#### Example: Configure Plugin Settings
+
+```bash
+#!/bin/bash
+set -e
+
+echo "[Hook] Configuring Stripe plugin..."
+
+# Configure plugin via system_config table
+mysql -h"$DATABASE_HOST" -u"$DATABASE_USER" -p"$DATABASE_PASSWORD" "$DATABASE_NAME" <<EOF
+INSERT INTO system_config (id, configuration_key, configuration_value, sales_channel_id, created_at)
+VALUES (
+    UNHEX(REPLACE(UUID(), '-', '')),
+    'StripePlugin.config.apiKey',
+    JSON_OBJECT('_value', '$STRIPE_API_KEY'),
+    NULL,
+    NOW()
+)
+ON DUPLICATE KEY UPDATE configuration_value = JSON_OBJECT('_value', '$STRIPE_API_KEY');
+EOF
+
+echo "[Hook] ✓ Plugin configuration complete"
+```
+
+#### Example: Create Sales Channel
+
+```bash
+#!/bin/bash
+set -e
+
+echo "[Hook] Creating sales channel..."
+
+# Use Shopware console commands
+bin/console sales-channel:create \
+  --name="B2B Store" \
+  --language="English" \
+  --currency="EUR"
+
+# Or use direct SQL for more control
+mysql -h"$DATABASE_HOST" -u"$DATABASE_USER" -p"$DATABASE_PASSWORD" "$DATABASE_NAME" <<EOF
+-- Your SQL statements here
+EOF
+
+echo "[Hook] ✓ Sales channel created"
+```
+
+#### Example: Import Demo Data
+
+```bash
+#!/bin/bash
+set -e
+
+echo "[Hook] Importing demo products..."
+
+# Import via Shopware CLI
+bin/console framework:demodata --products=100
+
+# Or import from CSV/JSON
+bin/console import:products /data/products.csv
+
+echo "[Hook] ✓ Demo data imported"
+```
+
+For more examples, see [`examples/init-scripts/`](examples/init-scripts/).
+
+#### Best Practices
+
+- Use numbered prefixes (`10-`, `20-`, `30-`) to control execution order
+- Mount scripts as read-only (`:ro`) for security
+- Use `ON DUPLICATE KEY UPDATE` in SQL for idempotency
+- Validate required environment variables at the start of scripts
+- Log script progress with clear messages
+- Test scripts in development before using in production
+
 ## Examples
 
 ### Development with Xdebug
@@ -276,6 +382,80 @@ test:
   volumes:
     - ./:/var/www/html
 ```
+
+### Custom Initialization Hooks
+
+Swocker supports custom initialization scripts that automatically execute at specific container lifecycle stages. This allows you to configure plugins, create sales channels, import data, and more without manual intervention.
+
+#### Hook Points
+
+1. **`/docker-entrypoint-init.d/`** - Pre-initialization scripts
+   - Executes before Shopware initialization
+   - Runs as root user
+   - Use for system-level setup
+
+2. **`/docker-entrypoint-shopware.d/`** - Shopware initialization scripts
+   - Executes after Shopware is installed and configured
+   - Runs as `www-data` user in `/var/www/html`
+   - Use for Shopware configuration, plugin setup, data import
+
+#### Usage
+
+Mount your custom scripts to the appropriate hook directory:
+
+```yaml
+services:
+  shopware:
+    image: ghcr.io/ilja/swocker:6.7-php8.2-dev
+    volumes:
+      - ./init-scripts:/docker-entrypoint-shopware.d:ro
+```
+
+Scripts are executed alphabetically. Use numbered prefixes to control execution order:
+
+```bash
+init-scripts/
+├── 10-configure-plugin.sh
+├── 20-create-sales-channels.sh
+└── 30-import-data.sh
+```
+
+#### Example: Configure Plugin After Installation
+
+```bash
+#!/bin/bash
+set -e
+
+echo "Configuring payment plugin..."
+
+# Configure via database
+mysql -h"$DATABASE_HOST" -u"$DATABASE_USER" -p"$DATABASE_PASSWORD" "$DATABASE_NAME" <<EOF
+INSERT INTO system_config (id, configuration_key, configuration_value, created_at)
+VALUES (
+    UNHEX(REPLACE(UUID(), '-', '')),
+    'PaymentPlugin.config.apiKey',
+    JSON_OBJECT('_value', '${PAYMENT_API_KEY}'),
+    NOW()
+)
+ON DUPLICATE KEY UPDATE configuration_value = JSON_OBJECT('_value', '${PAYMENT_API_KEY}');
+EOF
+
+echo "✓ Plugin configured"
+```
+
+#### Important Notes
+
+- Scripts must start with `#!/bin/bash` and use `set -e` for error handling
+- If any script fails, the container stops to prevent misconfiguration
+- Scripts should be idempotent (safe to run multiple times)
+- All container environment variables are available to scripts
+- Scripts have full access to Shopware CLI via `bin/console`
+
+See `examples/init-scripts/` for more comprehensive examples including:
+
+- Payment provider integration (Stripe)
+- Sales channel creation
+- Custom data import
 
 ## Performance Optimization
 

@@ -67,6 +67,7 @@ jobs:
           - variant:ci
           - performance
           - advanced
+          - hooks
     steps:
       - uses: actions/checkout@v4
 
