@@ -1,6 +1,6 @@
 # Swocker
 
-Modern, flexible Shopware 6 Docker images - a better alternative to dockware.
+Modern, flexible Shopware 6 Docker images optimized for development and production.
 
 ## Features
 
@@ -425,4 +425,4 @@ MIT License - see LICENSE file for details
 
 ## Acknowledgments
 
-Inspired by dockware, built for modern Docker workflows.
+Built for modern Docker workflows.

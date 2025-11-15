@@ -1,7 +1,7 @@
 {
   "name": "swocker",
   "version": "0.1.0",
-  "description": "Modern Shopware 6 Docker image - better than dockware",
+  "description": "Modern Shopware 6 Docker images optimized for development and production",
   "type": "module",
   "scripts": {
     "verify:tooling": "tsx scripts/verify-tooling.ts",
@@ -42,7 +42,6 @@
     "shopware",
     "docker",
     "shopware6",
-    "dockware",
     "development",
     "testing"
   ],
