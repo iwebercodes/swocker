@@ -80,6 +80,19 @@ fi
 # Verify PHP version
 echo "[Swocker] PHP version: $(php -v | head -n 1)"
 
+# =============================================================================
+# FIX TMPFS OWNERSHIP
+# =============================================================================
+# When tmpfs is mounted (e.g., /var/www/html/var), it gets root:root ownership
+# by default, even with mode=1777. This prevents www-data from writing files.
+# Fix ownership if the directory is owned by root.
+
+if [ -d "/var/www/html/var" ] && [ "$(stat -c '%U' /var/www/html/var)" = "root" ]; then
+    echo "[Swocker] Fixing tmpfs ownership for /var/www/html/var..."
+    chown -R www-data:www-data /var/www/html/var
+    echo "[Swocker] Ownership fixed: $(stat -c '%U:%G' /var/www/html/var)"
+fi
+
 # Re-run composer install if PHP version differs from build-time default
 if [ "$PHP_VERSION" != "${DEFAULT_PHP_VERSION}" ]; then
     echo "[Swocker] PHP version ${PHP_VERSION} differs from build default ${DEFAULT_PHP_VERSION}"
