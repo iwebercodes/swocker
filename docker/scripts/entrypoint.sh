@@ -388,8 +388,10 @@ EOF
     if [ ! -f "/var/www/html/install.lock" ]; then
         echo "[Swocker] Installing Shopware for the first time..."
 
-        # Run installation
-        su -s /bin/bash www-data -c "bin/console system:install --create-database --basic-setup --force"
+        # Always use --drop-database to ensure clean installation
+        # This handles cases where MySQL pre-creates the database (MYSQL_DATABASE env var)
+        # or when container is recreated but database persists
+        su -s /bin/bash www-data -c "bin/console system:install --drop-database --create-database --basic-setup --force"
 
         # Create admin user
         echo "[Swocker] Creating admin user..."

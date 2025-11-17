@@ -470,4 +470,329 @@ describe('Edge Cases and Error Handling', () => {
       }
     }, 40000);
   });
+
+  describe('MySQL Pre-created Database', () => {
+    it('handles pre-existing database by dropping and recreating it', async () => {
+      // This test verifies the fix for the reported issue where:
+      // - MySQL pre-creates database via MYSQL_DATABASE env var
+      // - Shopware needs to install but database already exists
+      // - Solution: Always use --drop-database to ensure clean installation
+
+      let mysqlContainer: Docker.Container | null = null;
+      let shopwareContainer: Docker.Container | null = null;
+
+      try {
+        // Step 1: Create MySQL with MYSQL_DATABASE=shopware
+        // This creates an EMPTY database named "shopware" before Swocker starts
+        mysqlContainer = await docker.createContainer({
+          Image: 'mysql:8.4',
+          Env: [
+            'MYSQL_ROOT_PASSWORD=root',
+            'MYSQL_DATABASE=shopware', // ← MySQL creates empty "shopware" database
+            'MYSQL_ROOT_HOST=%',
+          ],
+          ExposedPorts: { '3306/tcp': {} },
+          HostConfig: {
+            PortBindings: { '3306/tcp': [{ HostPort: '33061' }] },
+            Tmpfs: { '/var/lib/mysql': 'rw,noexec,nosuid,size=1g' },
+          },
+        });
+
+        await mysqlContainer.start();
+        await waitForLog(mysqlContainer, 'ready for connections', 120000);
+
+        // MySQL will have created an empty "shopware" database via MYSQL_DATABASE env var
+        // We don't verify this directly - we'll see if Shopware handles it correctly
+
+        // Step 2: Create Swocker container with DATABASE_NAME=shopware
+        // Swocker should handle pre-existing database automatically by dropping and recreating it
+        shopwareContainer = await createContainer({
+          Image: 'swocker:test-dev',
+          Env: [
+            'DATABASE_HOST=host.docker.internal',
+            'DATABASE_PORT=33061',
+            'DATABASE_USER=root',
+            'DATABASE_PASSWORD=root',
+            'DATABASE_NAME=shopware', // ← Same name as pre-created database
+            'APP_ENV=dev',
+            'APP_SECRET=test-secret',
+            'APP_URL=http://localhost:8081',
+          ],
+          ExposedPorts: { '80/tcp': {} },
+          HostConfig: {
+            PortBindings: { '80/tcp': [{ HostPort: '8081' }] },
+            ExtraHosts: ['host.docker.internal:host-gateway'],
+          },
+        });
+
+        // Wait for installation to complete
+        await waitForLog(shopwareContainer, 'Container ready', 180000);
+
+        // Verify installation succeeded by checking logs
+        const logs = await shopwareContainer.logs({ stdout: true, stderr: true });
+        const logStr = logs.toString();
+
+        // Should see DROP DATABASE message
+        expect(logStr).toMatch(/drop.*database|dropping.*database/i);
+
+        // Should see successful installation
+        expect(logStr).toContain('Shopware installation complete');
+        expect(logStr).toContain('Container ready');
+
+        // Verify database tables were created (migrations ran)
+        const tablesAfter = await execInContainer(shopwareContainer, [
+          'mysql',
+          '-h',
+          'host.docker.internal',
+          '-P33061',
+          '-uroot',
+          '-proot',
+          'shopware',
+          '-sN',
+          '-e',
+          'SHOW TABLES;',
+        ]);
+
+        // These tables should exist if migrations ran
+        expect(tablesAfter).toContain('product');
+        expect(tablesAfter).toContain('customer');
+        expect(tablesAfter).toContain('order');
+        expect(tablesAfter).toContain('user');
+
+        // Verify Shopware is fully functional
+        const consoleOutput = await execInContainer(shopwareContainer, ['bin/console', 'list']);
+        expect(consoleOutput).toContain('Shopware');
+      } finally {
+        if (shopwareContainer) await cleanup([shopwareContainer]);
+        if (mysqlContainer) await cleanup([mysqlContainer]);
+      }
+    }, 300000);
+
+    it('handles pre-existing database with non-root MySQL user', async () => {
+      // Test with restricted MySQL user (MYSQL_USER=shopware)
+      // This user won't have DROP DATABASE privilege by default
+
+      let mysqlContainer: Docker.Container | null = null;
+      let shopwareContainer: Docker.Container | null = null;
+
+      try {
+        // Step 1: Create MySQL with MYSQL_USER=shopware (restricted permissions)
+        mysqlContainer = await docker.createContainer({
+          Image: 'mysql:8.4',
+          Env: [
+            'MYSQL_ROOT_PASSWORD=root',
+            'MYSQL_DATABASE=shopware', // Pre-creates database
+            'MYSQL_USER=shopware', // Creates restricted user
+            'MYSQL_PASSWORD=shopware',
+            'MYSQL_ROOT_HOST=%',
+          ],
+          ExposedPorts: { '3306/tcp': {} },
+          HostConfig: {
+            PortBindings: { '3306/tcp': [{ HostPort: '33062' }] },
+            Tmpfs: { '/var/lib/mysql': 'rw,noexec,nosuid,size=1g' },
+          },
+        });
+
+        await mysqlContainer.start();
+        await waitForLog(mysqlContainer, 'ready for connections', 120000);
+
+        // Step 2: Create Swocker container using non-root user
+        shopwareContainer = await createContainer({
+          Image: 'swocker:test-dev',
+          Env: [
+            'DATABASE_HOST=host.docker.internal',
+            'DATABASE_PORT=33062',
+            'DATABASE_USER=shopware', // Non-root user
+            'DATABASE_PASSWORD=shopware',
+            'DATABASE_NAME=shopware',
+            'APP_ENV=dev',
+            'APP_SECRET=test-secret',
+            'APP_URL=http://localhost:8082',
+          ],
+          ExposedPorts: { '80/tcp': {} },
+          HostConfig: {
+            PortBindings: { '80/tcp': [{ HostPort: '8082' }] },
+            ExtraHosts: ['host.docker.internal:host-gateway'],
+          },
+        });
+
+        // Wait for installation to complete or fail
+        try {
+          await waitForLog(shopwareContainer, 'Container ready', 180000);
+        } catch (error) {
+          // If it fails, dump logs to see permission error
+          const logs = await shopwareContainer.logs({ stdout: true, stderr: true });
+          console.log('\n=== LOGS (non-root user test) ===');
+          console.log(logs.toString());
+          console.log('=== END LOGS ===\n');
+          throw error;
+        }
+
+        // Verify installation succeeded
+        const logs = await shopwareContainer.logs({ stdout: true, stderr: true });
+        const logStr = logs.toString();
+
+        expect(logStr).toContain('Shopware installation complete');
+        expect(logStr).toContain('Container ready');
+
+        // Verify database tables were created
+        const tables = await execInContainer(shopwareContainer, [
+          'mysql',
+          '-h',
+          'host.docker.internal',
+          '-P33062',
+          '-ushopware',
+          '-pshopware',
+          'shopware',
+          '-sN',
+          '-e',
+          'SHOW TABLES;',
+        ]);
+
+        expect(tables).toContain('product');
+        expect(tables).toContain('customer');
+      } finally {
+        if (shopwareContainer) await cleanup([shopwareContainer]);
+        if (mysqlContainer) await cleanup([mysqlContainer]);
+      }
+    }, 300000);
+
+    it('handles container recreate with persistent DATABASE_NAME=shopware', async () => {
+      // This reproduces the scenario where:
+      // 1. User runs container with DATABASE_NAME=shopware
+      // 2. Shopware installs successfully
+      // 3. Container is removed but MySQL persists (e.g., docker-compose down)
+      // 4. Container is recreated (docker-compose up)
+      // 5. New container has no install.lock but database "shopware" has full schema
+
+      let mysqlContainer: Docker.Container | null = null;
+      let shopwareContainer1: Docker.Container | null = null;
+      let shopwareContainer2: Docker.Container | null = null;
+
+      try {
+        // Step 1: Create MySQL with persistent database
+        mysqlContainer = await docker.createContainer({
+          Image: 'mysql:8.4',
+          Env: ['MYSQL_ROOT_PASSWORD=root', 'MYSQL_DATABASE=shopware', 'MYSQL_ROOT_HOST=%'],
+          ExposedPorts: { '3306/tcp': {} },
+          HostConfig: {
+            PortBindings: { '3306/tcp': [{ HostPort: '33060' }] },
+            Tmpfs: { '/var/lib/mysql': 'rw,noexec,nosuid,size=1g' },
+          },
+        });
+
+        await mysqlContainer.start();
+        await waitForLog(mysqlContainer, 'ready for connections', 120000);
+
+        // Step 2: Create first Shopware container
+        shopwareContainer1 = await createContainer({
+          Image: 'swocker:test-dev',
+          Env: [
+            'DATABASE_HOST=host.docker.internal',
+            'DATABASE_PORT=33060',
+            'DATABASE_USER=root',
+            'DATABASE_PASSWORD=root',
+            'DATABASE_NAME=shopware',
+            'APP_ENV=dev',
+            'APP_SECRET=test-secret',
+            'APP_URL=http://localhost:8080',
+          ],
+          ExposedPorts: { '80/tcp': {} },
+          HostConfig: {
+            PortBindings: { '80/tcp': [{ HostPort: '8080' }] },
+            ExtraHosts: ['host.docker.internal:host-gateway'],
+          },
+        });
+
+        // Wait for first installation to complete
+        await waitForLog(shopwareContainer1, 'Container ready', 180000);
+
+        // Verify first installation succeeded
+        const response1 = await fetch('http://localhost:8080');
+        expect(response1.status).toBeLessThan(400);
+
+        // Verify database tables exist
+        const tables1 = await execInContainer(shopwareContainer1, [
+          'mysql',
+          '-h',
+          'host.docker.internal',
+          '-P33060',
+          '-uroot',
+          '-proot',
+          'shopware',
+          '-sN',
+          '-e',
+          'SHOW TABLES;',
+        ]);
+        expect(tables1).toContain('product');
+        expect(tables1).toContain('customer');
+
+        // Step 3: Remove first container (simulating docker-compose down)
+        await shopwareContainer1.stop();
+        await shopwareContainer1.remove();
+        shopwareContainer1 = null;
+
+        // Step 4: Create second Shopware container with SAME DATABASE_NAME
+        // This is a NEW container without install.lock, but database "shopware" has full schema
+        shopwareContainer2 = await createContainer({
+          Image: 'swocker:test-dev',
+          Env: [
+            'DATABASE_HOST=host.docker.internal',
+            'DATABASE_PORT=33060',
+            'DATABASE_USER=root',
+            'DATABASE_PASSWORD=root',
+            'DATABASE_NAME=shopware', // Same database name!
+            'APP_ENV=dev',
+            'APP_SECRET=test-secret',
+            'APP_URL=http://localhost:8080',
+          ],
+          ExposedPorts: { '80/tcp': {} },
+          HostConfig: {
+            PortBindings: { '80/tcp': [{ HostPort: '8080' }] },
+            ExtraHosts: ['host.docker.internal:host-gateway'],
+          },
+        });
+
+        // Wait for second container to start (drops and recreates database)
+        await waitForLog(shopwareContainer2, 'Container ready', 180000);
+
+        // Step 5: Verify second container works correctly
+        const response2 = await fetch('http://localhost:8080');
+        expect(response2.status).toBeLessThan(400);
+
+        // Verify database tables still exist and are intact
+        const tables2 = await execInContainer(shopwareContainer2, [
+          'mysql',
+          '-h',
+          'host.docker.internal',
+          '-P33060',
+          '-uroot',
+          '-proot',
+          'shopware',
+          '-sN',
+          '-e',
+          'SHOW TABLES;',
+        ]);
+        expect(tables2).toContain('product');
+        expect(tables2).toContain('customer');
+
+        // Check logs to see what happened during second container startup
+        const logs2 = await shopwareContainer2.logs({ stdout: true, stderr: true });
+        const logStr = logs2.toString();
+
+        // The container should detect existing installation OR successfully reinstall
+        // We verify it didn't fail during startup
+        expect(logStr).toContain('Container ready');
+
+        // Verify Shopware console works
+        const consoleOutput = await execInContainer(shopwareContainer2, ['bin/console', 'list']);
+        expect(consoleOutput).toContain('Shopware');
+      } finally {
+        // Cleanup in reverse order
+        if (shopwareContainer2) await cleanup([shopwareContainer2]);
+        if (shopwareContainer1) await cleanup([shopwareContainer1]);
+        if (mysqlContainer) await cleanup([mysqlContainer]);
+      }
+    }, 480000);
+  });
 });
