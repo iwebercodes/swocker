@@ -35,6 +35,9 @@ ENV DATABASE_HOST="" \
     DB_MAX_RETRIES="30" \
     DB_RETRY_INTERVAL="2"
 
+# Post-healthy hooks configuration
+ENV POST_HEALTHY_TIMEOUT="300"
+
 # Install prerequisites
 RUN apt-get update && apt-get install -y \
     software-properties-common \
@@ -497,4 +500,3 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
-# Performance test comment

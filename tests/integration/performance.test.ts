@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Docker from 'dockerode';
 import { $ } from 'zx';
+import { readFileSync, writeFileSync } from 'fs';
 import {
   getDocker,
   createContainer,
@@ -162,11 +163,11 @@ describe('Performance', () => {
     it('incremental build is fast', async () => {
       // Make a trivial change to Dockerfile
       const dockerfilePath = 'docker/Dockerfile';
-      const originalContent = await $`cat ${dockerfilePath}`;
+      const originalContent = readFileSync(dockerfilePath, 'utf-8');
 
       try {
         // Add a comment
-        await $`echo "# Performance test comment" >> ${dockerfilePath}`;
+        writeFileSync(dockerfilePath, originalContent + '\n# Performance test comment\n');
 
         // Rebuild and measure
         const startTime = Date.now();
@@ -177,7 +178,7 @@ describe('Performance', () => {
         expect(duration).toBeLessThan(180000); // Under 3 minutes
       } finally {
         // Restore original
-        await $`echo ${originalContent} > ${dockerfilePath}`;
+        writeFileSync(dockerfilePath, originalContent);
 
         // Cleanup test image
         try {

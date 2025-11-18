@@ -57,6 +57,67 @@ run_hooks() {
 }
 
 # =============================================================================
+# NON-FATAL HOOK EXECUTION (for post-healthy hooks)
+# =============================================================================
+run_hooks_non_fatal() {
+    local hook_dir="$1"
+    local hook_stage="$2"
+    local run_as_user="${3:-root}"
+
+    # Check if directory exists
+    if [ ! -d "$hook_dir" ]; then
+        return 0
+    fi
+
+    # Count *.sh files
+    local hook_count=$(find "$hook_dir" -maxdepth 1 -name "*.sh" -type f 2>/dev/null | wc -l)
+    if [ "$hook_count" -eq 0 ]; then
+        echo "[Swocker] No ${hook_stage} scripts found, skipping"
+        return 0
+    fi
+
+    echo "[Swocker] Executing ${hook_stage} scripts..."
+
+    # Sort files alphabetically and execute
+    for script in $(find "$hook_dir" -maxdepth 1 -name "*.sh" -type f | sort); do
+        if [ -f "$script" ]; then
+            local script_name=$(basename "$script")
+
+            # Check health marker before each hook (race condition protection)
+            if [ ! -f /tmp/.swocker-healthy ]; then
+                echo "[Swocker] ⚠ Health marker removed, aborting remaining hooks"
+                return 1
+            fi
+
+            echo "[Swocker] Running ${script_name}..."
+
+            # Run as specified user
+            if [ "$run_as_user" = "www-data" ]; then
+                if cat "$script" | su -s /bin/bash www-data -c "cd /var/www/html && bash"; then
+                    echo "[Swocker] ✓ ${script_name} completed"
+                else
+                    local exit_code=$?
+                    echo "[Swocker] ⚠ ${script_name} failed with exit code ${exit_code}"
+                    echo "[Swocker] WARNING: Post-healthy hook failed, but container continues"
+                    # Don't exit - just log and continue to next hook
+                fi
+            else
+                if cat "$script" | bash; then
+                    echo "[Swocker] ✓ ${script_name} completed"
+                else
+                    local exit_code=$?
+                    echo "[Swocker] ⚠ ${script_name} failed with exit code ${exit_code}"
+                    echo "[Swocker] WARNING: Post-healthy hook failed, but container continues"
+                    # Don't exit - just log and continue to next hook
+                fi
+            fi
+        fi
+    done
+
+    echo "[Swocker] All ${hook_stage} scripts processed"
+}
+
+# =============================================================================
 # PHP VERSION SWITCHING
 # =============================================================================
 
@@ -455,6 +516,66 @@ fi
 
 # Execute Shopware hooks (runs regardless of DATABASE_HOST for future SQLite/internal DB support)
 run_hooks "/docker-entrypoint-shopware.d" "Shopware initialization" "www-data"
+
+# =============================================================================
+# SIGNAL HANDLER FOR GRACEFUL SHUTDOWN
+# =============================================================================
+shutdown_handler() {
+    echo "[Swocker] Received shutdown signal, allowing hooks to finish..."
+
+    # Wait up to 30 seconds for completion marker
+    local waited=0
+    while [ ! -f /tmp/.swocker-post-healthy-complete ] && [ $waited -lt 30 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    if [ -f /tmp/.swocker-post-healthy-complete ]; then
+        echo "[Swocker] Hooks completed before shutdown"
+    else
+        echo "[Swocker] Shutdown timeout, hooks may be incomplete"
+    fi
+}
+
+trap shutdown_handler SIGTERM SIGINT
+
+# =============================================================================
+# POST-HEALTHY HOOKS (runs in background after container becomes healthy)
+# =============================================================================
+(
+    # Clean state files from any previous runs
+    rm -f /tmp/.swocker-healthy
+    rm -f /tmp/.swocker-post-healthy-complete
+
+    # Configuration
+    MAX_WAIT="${POST_HEALTHY_TIMEOUT:-300}"  # 5 minutes default
+    CHECK_INTERVAL=2
+    ELAPSED=0
+
+    echo "[Swocker] Post-healthy hook monitor started (max wait: ${MAX_WAIT}s)"
+
+    # Wait for health marker
+    while [ ! -f /tmp/.swocker-healthy ]; do
+        if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "[Swocker] WARNING: Container did not become healthy within ${MAX_WAIT}s"
+            echo "[Swocker] Skipping post-healthy hooks"
+            exit 0
+        fi
+
+        sleep $CHECK_INTERVAL
+        ELAPSED=$((ELAPSED + CHECK_INTERVAL))
+    done
+
+    echo "[Swocker] Container is healthy (detected after ${ELAPSED}s)"
+
+    # Execute post-healthy hooks
+    run_hooks_non_fatal "/docker-entrypoint-shopware-healthy.d" "post-healthy initialization" "www-data"
+
+    # Create completion marker
+    touch /tmp/.swocker-post-healthy-complete
+    echo "[Swocker] Post-healthy hooks complete"
+
+) &
 
 echo "[Swocker] Container ready!"
 

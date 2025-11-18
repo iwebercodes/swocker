@@ -102,8 +102,16 @@ fi
 # Final status
 if [ $HEALTH_STATUS -eq 0 ]; then
     echo "[Health Check] ✓ All health checks passed"
+
+    # Create marker file for post-healthy hooks
+    touch /tmp/.swocker-healthy
+
     exit 0
 else
     echo "[Health Check] ✗ Health check failed"
+
+    # Remove marker if it exists (container unhealthy)
+    rm -f /tmp/.swocker-healthy
+
     exit 1
 fi

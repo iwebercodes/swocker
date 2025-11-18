@@ -226,6 +226,12 @@ volumes:
   - ./plugins/MyCustomPlugin:/var/www/html/custom/plugins/MyCustomPlugin
 ```
 
+### Hook Configuration
+
+| Variable               | Default | Description                                         |
+| ---------------------- | ------- | --------------------------------------------------- |
+| `POST_HEALTHY_TIMEOUT` | `300`   | Max seconds to wait for container to become healthy |
+
 ### Custom Initialization Hook Scripts
 
 Swocker supports custom initialization scripts that execute automatically at specific container lifecycle stages. This allows you to automate configuration, data imports, and other setup tasks without manual intervention.
@@ -331,6 +337,142 @@ For more examples, see [`examples/init-scripts/`](examples/init-scripts/).
 - Validate required environment variables at the start of scripts
 - Log script progress with clear messages
 - Test scripts in development before using in production
+
+### Post-Healthy Initialization Hooks
+
+Post-healthy hooks execute **after** the container passes health checks and the application is fully operational. These are ideal for tasks that require Shopware to be ready to serve HTTP requests.
+
+#### When to Use Post-Healthy Hooks vs Regular Hooks
+
+| Feature               | Regular Hooks          | Post-Healthy Hooks        |
+| --------------------- | ---------------------- | ------------------------- |
+| **Execution timing**  | During startup         | After health check passes |
+| **Application state** | Installing/configuring | Fully operational         |
+| **HTTP requests**     | Not reliable           | ✓ Reliable                |
+| **Failure behavior**  | Container exits        | ✓ Log warning, continue   |
+| **Use case**          | Critical setup         | Optional integrations     |
+
+#### Hook Directory
+
+- **`/docker-entrypoint-shopware-healthy.d/`** - Post-healthy scripts (runs as `www-data`, after container becomes healthy)
+
+#### Usage
+
+```yaml
+services:
+  shopware:
+    image: iwebercodes/swocker:latest-dev
+    volumes:
+      - ./post-healthy-scripts:/docker-entrypoint-shopware-healthy.d:ro
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PASSWORD: root
+      POST_HEALTHY_TIMEOUT: '300' # Optional: max seconds to wait for healthy (default: 300)
+```
+
+#### Key Differences from Regular Hooks
+
+1. **Non-Fatal Failures**: Hook failures are logged but don't crash the container
+2. **Application Ready**: Shopware can serve HTTP requests and process API calls
+3. **Timing**: Executes 60-90 seconds after container start (after health checks pass)
+
+#### Example: Webhook Registration
+
+```bash
+#!/bin/bash
+set -e
+
+echo "[Hook] Registering webhook with payment provider..."
+
+# Hook implements own timeout for external service call
+timeout 30 curl -X POST "https://payment-provider.com/api/webhooks" \
+    -H "Authorization: Bearer ${PAYMENT_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"url\":\"${SHOP_URL}/api/webhook/payment\",\"events\":[\"payment.completed\"]}" \
+    || {
+        echo "[Hook] ⚠ Webhook registration failed (timeout or error)"
+        echo "[Hook] This is non-critical, continuing..."
+        exit 0  # Non-fatal failure
+    }
+
+echo "[Hook] ✓ Webhook registered successfully"
+```
+
+#### Example: Product Feed Distribution
+
+```bash
+#!/bin/bash
+set -e
+
+echo "[Hook] Pushing product feed to marketplace..."
+
+# Download feed from Shopware (requires application ready)
+curl -o /tmp/products.xml "http://localhost/feed/products.xml" \
+    --retry 3 --retry-delay 2
+
+# Push to external marketplace
+curl -X POST "https://marketplace.com/api/import" \
+    -H "Authorization: Bearer ${MARKETPLACE_API_KEY}" \
+    -F "feed=@/tmp/products.xml" \
+    --max-time 120
+
+echo "[Hook] ✓ Product feed uploaded successfully"
+```
+
+For more examples, see [`examples/init-scripts/post-healthy/`](examples/init-scripts/post-healthy/).
+
+#### Monitoring Hook Execution
+
+**Check if hooks completed:**
+
+```bash
+docker logs <container-name> 2>&1 | grep "post-healthy"
+```
+
+**Wait for hooks in docker-compose:**
+
+```yaml
+services:
+  shopware:
+    image: iwebercodes/swocker:latest-dev
+    healthcheck:
+      test: test -f /tmp/.swocker-post-healthy-complete
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 120s
+
+  tests:
+    depends_on:
+      shopware:
+        condition: service_healthy # Waits for hooks to complete
+```
+
+#### Troubleshooting
+
+**Hooks not executing:**
+
+```bash
+# 1. Check if directory is mounted
+docker exec <container-name> ls -la /docker-entrypoint-shopware-healthy.d/
+
+# 2. Check monitor started
+docker logs <container-name> 2>&1 | grep "Post-healthy hook monitor started"
+
+# 3. Check if container became healthy
+docker inspect <container-name> | grep -A 10 "Health"
+```
+
+**Hook failures:**
+
+```bash
+# Find failed hooks
+docker logs <container-name> 2>&1 | grep "⚠"
+
+# Test hook manually
+docker exec -u www-data <container-name> bash -c \
+  "cd /var/www/html && bash /docker-entrypoint-shopware-healthy.d/10-webhook.sh"
+```
 
 ## Examples
 
