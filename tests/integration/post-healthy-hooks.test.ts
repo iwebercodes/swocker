@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { getDocker, cleanupByName, waitForLog } from '../helpers/docker.js';
+import { getDocker, cleanupByName, waitForLog, waitForHealthy } from '../helpers/docker.js';
 import { $ } from 'zx';
 import * as path from 'path';
 
@@ -13,9 +13,13 @@ describe('Post-Healthy Initialization Hooks', () => {
   beforeAll(async () => {
     console.log('Setting up post-healthy hooks test environment...');
 
-    await cleanupByName([TEST_DB_CONTAINER], [TEST_NETWORK]);
+    await cleanupByName([TEST_DB_CONTAINER, 'swocker-test-webhook-receiver'], [TEST_NETWORK]);
 
     await $`docker build -f docker/Dockerfile --target dev -t ${TEST_IMAGE_TAG} .`;
+
+    // Pull webhook-receiver image
+    console.log('Pulling webhook-receiver image...');
+    await $`docker pull iwebercodes/webhook-receiver:latest`;
 
     try {
       await $`docker network create ${TEST_NETWORK}`;
@@ -33,7 +37,7 @@ describe('Post-Healthy Initialization Hooks', () => {
 
     console.log('Waiting for MySQL to initialize...');
     await new Promise((resolve) => setTimeout(resolve, 30000));
-  }, 120000);
+  }, 180000); // Increased timeout to account for webhook-receiver image pull
 
   afterAll(async () => {
     try {
@@ -559,4 +563,206 @@ describe('Post-Healthy Initialization Hooks', () => {
       await container.remove();
     }
   }, 180000);
+
+  it('CRITICAL: should send webhooks to external services from post-healthy hooks', async () => {
+    const docker = getDocker();
+    const hooksPath = path.resolve(process.cwd(), 'tests/fixtures/hooks/post-healthy-webhook');
+
+    // Start webhook-receiver container
+    const webhookReceiverContainer = await docker.createContainer({
+      Image: 'iwebercodes/webhook-receiver:latest',
+      name: 'swocker-test-webhook-receiver',
+      HostConfig: {
+        NetworkMode: TEST_NETWORK,
+      },
+      NetworkingConfig: {
+        EndpointsConfig: {
+          [TEST_NETWORK]: {
+            Aliases: ['webhook-receiver'],
+          },
+        },
+      },
+    });
+
+    let shopwareContainer;
+
+    try {
+      await webhookReceiverContainer.start();
+
+      // Wait for webhook-receiver to be ready
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      // Start Shopware container with webhook hook
+      shopwareContainer = await docker.createContainer({
+        Image: TEST_IMAGE_TAG,
+        Env: [
+          `DATABASE_HOST=${TEST_DB_CONTAINER}`,
+          'DATABASE_PASSWORD=test123',
+          'DATABASE_NAME=shopware_post_healthy_webhook',
+          'APP_URL=http://shopware-webhook-test',
+        ],
+        HostConfig: {
+          NetworkMode: TEST_NETWORK,
+          Binds: [`${hooksPath}:/docker-entrypoint-shopware-healthy.d:ro`],
+        },
+      });
+
+      await shopwareContainer.start();
+
+      // Wait for post-healthy hooks to complete
+      await waitForLog(shopwareContainer, '[Swocker] Post-healthy hooks complete', 180000);
+
+      // Verify webhook was sent by checking hook status file
+      const statusExec = await shopwareContainer.exec({
+        Cmd: ['cat', '/tmp/post-healthy-webhook-status'],
+        AttachStdout: true,
+      });
+      const statusStream = await statusExec.start({ hijack: true });
+      let statusOutput = '';
+      statusStream.on('data', (chunk: Buffer) => {
+        statusOutput += chunk.slice(8).toString();
+      });
+      await new Promise((resolve) => statusStream.on('end', resolve));
+
+      expect(statusOutput.trim()).toBe('WEBHOOK_SENT');
+
+      // Query webhook-receiver API to verify webhook was received
+      const webhookCheckExec = await webhookReceiverContainer.exec({
+        Cmd: ['curl', '-s', 'http://localhost/api/webhooks/test-session-swocker'],
+        AttachStdout: true,
+      });
+      const webhookStream = await webhookCheckExec.start({ hijack: true });
+      let webhookOutput = '';
+      webhookStream.on('data', (chunk: Buffer) => {
+        webhookOutput += chunk.slice(8).toString();
+      });
+      await new Promise((resolve) => webhookStream.on('end', resolve));
+
+      // Parse webhook response (API returns array directly)
+      const webhooks = JSON.parse(webhookOutput);
+
+      // Verify webhook was received
+      expect(Array.isArray(webhooks)).toBe(true);
+      expect(webhooks.length).toBeGreaterThan(0);
+
+      // Verify webhook payload
+      const webhook = webhooks[0];
+      expect(webhook).toHaveProperty('body');
+
+      // webhook.body is already an object, not a JSON string
+      const body = webhook.body;
+      expect(body.event).toBe('shop.ready');
+      expect(body.data.shop_url).toBe('http://shopware-webhook-test');
+      expect(body.data.database).toBe('shopware_post_healthy_webhook');
+      expect(body.data.message).toContain('Shopware is fully ready');
+
+      // Verify webhook headers
+      expect(webhook.headers).toHaveProperty('content-type');
+      expect(webhook.headers['content-type']).toContain('application/json');
+      expect(webhook.headers).toHaveProperty('x-shopware-shop-signature');
+      expect(webhook.headers['x-shopware-shop-signature']).toBe('test-signature');
+
+      // Verify logs show webhook was sent
+      const logs = await shopwareContainer.logs({ stdout: true, stderr: true });
+      const logStr = logs.toString();
+
+      expect(logStr).toContain('[Test Hook] Sending webhook to external service');
+      expect(logStr).toContain('[Test Hook] ✓ Webhook sent successfully');
+    } finally {
+      if (shopwareContainer) {
+        await shopwareContainer.stop({ t: 10 });
+        await shopwareContainer.remove();
+      }
+      await webhookReceiverContainer.stop({ t: 5 });
+      await webhookReceiverContainer.remove();
+    }
+  }, 240000);
+
+  it('REGRESSION: should execute hooks when HEALTHCHECK is overridden (APP_URL=container)', async () => {
+    const docker = getDocker();
+    const hooksPath = path.resolve(process.cwd(), 'tests/fixtures/hooks/post-healthy');
+
+    // This test reproduces the bug reported in feedback:
+    // When users override HEALTHCHECK and set APP_URL to container hostname,
+    // Docker reports container as healthy, but /usr/local/bin/healthcheck.sh fails
+    // because it curls localhost with wrong Host header expectations.
+
+    const container = await docker.createContainer({
+      Image: TEST_IMAGE_TAG,
+      Env: [
+        `DATABASE_HOST=${TEST_DB_CONTAINER}`,
+        'DATABASE_PASSWORD=test123',
+        'DATABASE_NAME=shopware_post_healthy_override',
+        'APP_URL=http://shopware', // Container hostname - breaks healthcheck.sh
+      ],
+      HostConfig: {
+        NetworkMode: TEST_NETWORK,
+        Binds: [`${hooksPath}:/docker-entrypoint-shopware-healthy.d:ro`],
+      },
+      // Override HEALTHCHECK (like users do in docker-compose.yml)
+      Healthcheck: {
+        Test: ['CMD', 'curl', '-f', 'http://localhost/api/_info/health-check'],
+        Interval: 10000000000, // 10s in nanoseconds
+        Timeout: 5000000000, // 5s in nanoseconds
+        Retries: 15,
+        StartPeriod: 60000000000, // 60s in nanoseconds
+      },
+    });
+
+    try {
+      await container.start();
+
+      // Wait for container startup
+      await waitForLog(container, '[Swocker] Container ready!', 120000);
+
+      // Wait for Docker to report container as healthy
+      // This SHOULD succeed because the custom HEALTHCHECK works
+      await waitForHealthy(container, 180000);
+
+      console.log('✅ Docker reports container as healthy');
+
+      // Now verify healthcheck.sh behavior
+      const healthcheckExec = await container.exec({
+        Cmd: ['/usr/local/bin/healthcheck.sh'],
+        AttachStdout: true,
+        AttachStderr: true,
+      });
+      const healthStream = await healthcheckExec.start({ hijack: true });
+      let healthOutput = '';
+      healthStream.on('data', (chunk: Buffer) => {
+        healthOutput += chunk.slice(8).toString();
+      });
+      await new Promise((resolve) => healthStream.on('end', resolve));
+
+      const healthInspect = await healthcheckExec.inspect();
+      console.log('healthcheck.sh exit code:', healthInspect.ExitCode);
+      console.log('healthcheck.sh output:', healthOutput);
+
+      // Document the bug: healthcheck.sh fails even though Docker reports healthy
+      if (healthInspect.ExitCode !== 0) {
+        console.log('⚠️  BUG CONFIRMED: healthcheck.sh fails but Docker is healthy');
+      }
+
+      // The critical test: post-healthy hooks SHOULD execute when Docker is healthy
+      // Currently this will timeout because hooks never run (the bug)
+      await waitForLog(container, '[Swocker] Post-healthy hooks complete', 90000);
+
+      // Verify hook actually ran
+      const exec = await container.exec({
+        Cmd: ['cat', '/tmp/post-healthy-hook-status'],
+        AttachStdout: true,
+      });
+      const stream = await exec.start({ hijack: true });
+      let output = '';
+      stream.on('data', (chunk: Buffer) => {
+        output += chunk.slice(8).toString();
+      });
+      await new Promise((resolve) => stream.on('end', resolve));
+
+      expect(output).toContain('POST_HEALTHY_SUCCESS');
+    } finally {
+      await container.stop({ t: 10 });
+      await container.remove();
+    }
+  }, 240000);
 });

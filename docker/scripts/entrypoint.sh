@@ -83,9 +83,9 @@ run_hooks_non_fatal() {
         if [ -f "$script" ]; then
             local script_name=$(basename "$script")
 
-            # Check health marker before each hook (race condition protection)
-            if [ ! -f /tmp/.swocker-healthy ]; then
-                echo "[Swocker] ⚠ Health marker removed, aborting remaining hooks"
+            # Check container health before each hook (race condition protection)
+            if ! curl -sf http://localhost/api/_info/health-check >/dev/null 2>&1; then
+                echo "[Swocker] ⚠ Container became unhealthy, aborting remaining hooks"
                 return 1
             fi
 
@@ -554,11 +554,25 @@ trap shutdown_handler SIGTERM SIGINT
 
     echo "[Swocker] Post-healthy hook monitor started (max wait: ${MAX_WAIT}s)"
 
-    # Wait for health marker
-    while [ ! -f /tmp/.swocker-healthy ]; do
-        if [ $ELAPSED -ge $MAX_WAIT ]; then
-            echo "[Swocker] WARNING: Container did not become healthy within ${MAX_WAIT}s"
-            echo "[Swocker] Skipping post-healthy hooks"
+    # Wait for container to become healthy by checking the health endpoint
+    # We use the simple API health-check endpoint (same as what users typically
+    # configure in custom HEALTHCHECKs) because it works regardless of APP_URL setting,
+    # whereas the full healthcheck.sh script may fail with certain configurations
+    while [ $ELAPSED -lt $MAX_WAIT ]; do
+        # Check if Shopware's health endpoint responds correctly
+        if curl -sf http://localhost/api/_info/health-check >/dev/null 2>&1; then
+            echo "[Swocker] Container is healthy (detected after ${ELAPSED}s)"
+
+            # Create marker for compatibility with existing tests
+            touch /tmp/.swocker-healthy
+
+            # Execute post-healthy hooks
+            run_hooks_non_fatal "/docker-entrypoint-shopware-healthy.d" "post-healthy initialization" "www-data"
+
+            # Create completion marker
+            touch /tmp/.swocker-post-healthy-complete
+            echo "[Swocker] Post-healthy hooks complete"
+
             exit 0
         fi
 
@@ -566,14 +580,9 @@ trap shutdown_handler SIGTERM SIGINT
         ELAPSED=$((ELAPSED + CHECK_INTERVAL))
     done
 
-    echo "[Swocker] Container is healthy (detected after ${ELAPSED}s)"
-
-    # Execute post-healthy hooks
-    run_hooks_non_fatal "/docker-entrypoint-shopware-healthy.d" "post-healthy initialization" "www-data"
-
-    # Create completion marker
-    touch /tmp/.swocker-post-healthy-complete
-    echo "[Swocker] Post-healthy hooks complete"
+    echo "[Swocker] WARNING: Container did not become healthy within ${MAX_WAIT}s"
+    echo "[Swocker] Skipping post-healthy hooks"
+    exit 0
 
 ) &
 
