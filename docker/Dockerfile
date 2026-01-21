@@ -1,7 +1,7 @@
 # Swocker - Modern Shopware 6 Docker Image
 # Multi-stage Dockerfile with runtime PHP version switching
 
-ARG SHOPWARE_VERSION=6.7.4.0
+ARG SHOPWARE_VERSION=6.7.6.2
 ARG DEFAULT_PHP_VERSION=8.3
 ARG SUPPORTED_PHP_VERSIONS="8.2,8.3"
 
